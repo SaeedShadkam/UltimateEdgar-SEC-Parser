@@ -9,7 +9,7 @@ import random
 import time
 import sys
 import pickle
-from Classes_Functions.Class_Function import Official_Items, Official_Items_10K, Official_Items_important_words, Official_Items_important_words_10K, Disclosure, Disclosure_10K, paragraph_splitter
+from src.Class_Function import Official_Items, Official_Items_10K, Official_Items_important_words, Official_Items_important_words_10K, Disclosure, Disclosure_10K, paragraph_splitter
 
 number_of_files = 10
 number_of_words = 400
