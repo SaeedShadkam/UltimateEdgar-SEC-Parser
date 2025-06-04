@@ -219,8 +219,8 @@ class Disclosure_10K():
       #self.corrupted = True
 
   def Remove_Tables_hreflinks(self):
-    '''This function Removes a table, if it contains an href link which means this is the table of contents!
-    As a side bonous, it also removes the phrase table of contents whithin the text (At the end of each page, there is sometimes links to the table of contents'''
+    '''This function removes a table if it contains an href link, which indicates it is the table of contents.
+    As a side bonus, it also removes the phrase "table of contents" within the text (at the end of each page there is sometimes a link to the table of contents).'''
 
     regex = '\s*table\s*of\s*contents'
     for element in self.soup.find_all('a', string=re.compile(regex, re.IGNORECASE)):
@@ -772,8 +772,8 @@ class Disclosure():
 
 
   def Remove_Tables_hreflinks(self):
-    '''This function Removes a table, if it contains an href link which means this is the table of contents!
-    As a side bonous, it also removes the phrase table of contents whithin the text (At the end of each page, there is sometimes links to the table of contents'''
+    '''This function removes a table if it contains an href link, which indicates it is the table of contents.
+    As a side bonus, it also removes the phrase "table of contents" within the text (at the end of each page there is sometimes a link to the table of contents).'''
 
     regex = '\s*table\s*of\s*contents'
     for element in self.soup.find_all('a', string=re.compile(regex, re.IGNORECASE)):
