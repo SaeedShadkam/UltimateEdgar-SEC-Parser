@@ -155,7 +155,7 @@ class Disclosure_10K():
     self.corrupted = False
     self.State = 'Fine'
 
-  def Propreties(self):
+  def Properties(self):
     '''This function prints out a summary about the specific disclosure instance'''
     print(f'This file is for \033[94m"{self.Company_Name}"\033[0m with the cik \033[94m"{self.cik}"\033[0m, which has been filed on \033[94m"{self.Date_Filed}"\033[0m,')
     print(f'here is the link to the html source {self.HTML_Address},')
@@ -710,7 +710,7 @@ class Disclosure():
     self.corrupted = False
     self.State = 'Fine'
 
-  def Propreties(self):
+  def Properties(self):
     '''This function prints out a summary about the specific disclosure instance'''
     print(f'This file is for \033[94m"{self.Company_Name}"\033[0m with the CIK \033[94m"{self.CIK}"\033[0m, which has been filed on \033[94m"{self.Date_Filed}"\033[0m,')
     print(f'here is the link to the html source {self.HTML_Address},')
