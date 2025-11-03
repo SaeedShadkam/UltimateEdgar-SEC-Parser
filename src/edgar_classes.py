@@ -12,7 +12,7 @@ import html5lib
 
 Old_HTMLs = []
 Not_Well_Parsed = []
-
+String_Not_Available = []
 
 Official_Items_10K = ["Item 1. Business.",
          "Item 1A. Risk Factors.",
@@ -118,6 +118,44 @@ Official_Items_important_words = [['financial', 'statements'],
          ['management', 'discussion', 'analysis']]
 
 
+#We cannot find the paragraphs as there are random \n all over the place
+# So, we just stick as many as possible sentences in each item together!
+def paragraph_splitter(doc, max_words_document=500):
+  par = []
+  while len(doc.split())>max_words_document:
+    indicator = False
+    #print(len(par), par)
+    matches = re.finditer('\.', doc)
+    counter = 0
+    for Match in list(matches):
+      if (len(doc[:Match.span()[0]].split())>=max_words_document):
+        if counter==0:
+          break
+        par.append(doc[:last_match.span()[1]])
+        doc = doc[last_match.span()[1]:]
+        indicator = True
+        break
+      counter+=1
+      last_match = Match
+    if not indicator:
+      #print("There is a senctence exceeding maximum word numbers!")
+      # I need to randomely split the paragraph. I try to make one as long as possible paragraph
+      # Then, I check for sentence in the rest of the paragraph
+      matches = re.finditer('\s', doc)
+      for Match in list(matches):
+        if len(doc[:Match.span()[0]].split())==max_words_document:
+          par.append(doc[:Match.span()[1]])
+          doc = doc[Match.span()[1]:]
+          break
+  par.append(doc)
+
+  document = []
+  for i in par:
+    document.append(i)
+  return document
+
+
+
 def Remove_DuplicatedItems(Var, indices):
   for i in reversed(indices):
     del Var[i]
@@ -137,11 +175,12 @@ class Disclosure_10K():
   '''This class does almost everything. It makes an instance from each SEC document and does the pre-processing required on the instance and
   at the end adds the relevant information to the instance!'''
 
-  def __init__(self, cik, TXT_Address, HTML_Address, Company_Name, Form_Type, Date_Filed):
+  def __init__(self, cik, TXT_Address, HTML_Address, Company_Name, Form_Type, Date_Filed, User_Api='Example Contact (email@example.com)'):
     global Old_HTMLs
     global Not_Well_Parsed
     global String_Not_Available
     self.cik = cik
+    self.user_agent = User_Api
     prefix = "https://www.sec.gov/Archives/"
     self.TXT_Address = prefix + TXT_Address
     self.HTML_Address = prefix + HTML_Address
@@ -169,13 +208,13 @@ class Disclosure_10K():
     self.Title_Name = Title_Name
 
   @classmethod
-  def Initializer(cls, observation: pd.Series)->'Disclosure':
-    return cls(observation.cik, observation.TXTAddress, observation.DisclosureAddress, observation.CompanyName, observation.FormType, observation.DateFiled)
+  def Initializer(cls, observation: pd.Series, User_Api='Example Contact (email@example.com)')->'Disclosure':
+    return cls(observation.cik, observation.TXTAddress, observation.DisclosureAddress, observation.CompanyName, observation.FormType, observation.DateFiled,User_Api)
 
   def Load(self):
     '''This function downloads the html (.txt) code and parse it Employing beautifulsoup'''
     url = self.TXT_Address
-    response = requests.get(url, headers={'User-Agent': 'Example Contact (email@example.com)'})
+    response = requests.get(url, headers={'User-Agent': f'{self.user_agent}'})
     #print('Downloading the flie ....')
     self.Text = response.text
     try:
@@ -692,11 +731,12 @@ class Disclosure():
   '''This class does almost everything. It makes an instance from each SEC document and does the pre-processing required on the instance and
   at the end adds the relevant information to the instance!'''
 
-  def __init__(self, CIK, TXT_Address, HTML_Address, Company_Name, Form_Type, Date_Filed):
+  def __init__(self, CIK, TXT_Address, HTML_Address, Company_Name, Form_Type, Date_Filed, User_Api='Example Contact (email@example.com)'):
     global Old_HTMLs
     global Not_Well_Parsed
     global String_Not_Available
     self.CIK = CIK
+    self.user_agent = User_Api
     prefix = "https://www.sec.gov/Archives/"
     self.TXT_Address = prefix + TXT_Address
     self.HTML_Address = prefix + HTML_Address
@@ -724,13 +764,13 @@ class Disclosure():
     self.Title_Name = Title_Name
 
   @classmethod
-  def Initializer(cls, observation: pd.Series)->'Disclosure':
-    return cls(observation.cik, observation.TXTAddress, observation.DisclosureAddress, observation.CompanyName, observation.FormType, observation.DateFiled)
+  def Initializer(cls, observation: pd.Series, User_Api='Example Contact (email@example.com)')->'Disclosure':
+    return cls(observation.cik, observation.TXTAddress, observation.DisclosureAddress, observation.CompanyName, observation.FormType, observation.DateFiled, User_Api)
 
   def Load(self):
     '''This function downloads the html (.txt) code and parse it Employing beautifulsoup'''
     url = self.TXT_Address
-    response = requests.get(url, headers={'User-Agent': 'Example Contact (email@example.com)'})
+    response = requests.get(url, headers={'User-Agent': f'{self.user_agent}'})
     #print('Downloading the flie ....')
     self.Text = response.text
     try:
@@ -1223,35 +1263,3 @@ class Disclosure():
       writefile.write(self.True_Items[i+1])
       if self.True_Items[i+1]!= 'Item 6. Exhibits.':
         writefile.write(f'<p>{self.sections_text[i+1]}</p>')
-
-def paragraph_splitter(doc, max_words_document=500):
-
-  par = []
-  while len(doc.split())>max_words_document:
-    # It checks for 10 sentence in a paragraph
-    indicator = False
-    for j in range(10):
-      matches = re.finditer('\.', doc)
-      for match in reversed(list(matches)):
-        if len(doc[:match.span()[0]].split())<max_words_document:
-          par.append(doc[:match.span()[1]])
-          doc = doc[match.span()[1]:]
-          indicator = True
-          break
-
-    if not indicator:
-      #print("There is a senctence exceeding maximum word numbers!")
-      # I need to randomely split the paragraph. I try to make one as long as possible paragraph
-      # Then, I check for sentence in the rest of the paragraph
-      matches = re.finditer('\s', doc)
-      for match in reversed(list(matches)):
-        if len(doc[:match.span()[0]].split())<max_words_document:
-          par.append(doc[:match.span()[1]])
-          doc = doc[match.span()[1]:]
-          break
-  par.append(doc)
-
-  document = []
-  for i in par:
-    document.append(i)
-  return document
