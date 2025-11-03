@@ -43,6 +43,9 @@ if {'cik', 'adsh', 'instance'}.issubset(df.columns):
 	print(f"\nExample HTML URL:")
 	print(df.iloc[0]['html_url'])
 
+
+df = df.loc[df['form'].isin(['10-K', '10-Q'])]
+df = df.reset_index(drop=True)
 # Save combined CSV next to the dataset folder
 output_csv = os.path.join("src", "Financial Statement Dataset", "edgar_sub_database.csv")
 os.makedirs(os.path.dirname(output_csv), exist_ok=True)
