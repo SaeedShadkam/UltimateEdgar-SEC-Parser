@@ -1,3 +1,22 @@
+"""
+Core EDGAR parsing helpers and classes.
+
+This module provides:
+- paragraph_splitter: split long text into chunks by sentence/word budget
+- Disclosure (10-Q) and Disclosure_10K classes that:
+  - load the submission text (TXT) from SEC Archives with a User-Agent
+  - parse the HTML with BeautifulSoup (html.parser with html5lib fallback)
+  - remove numeric/color/hyperlink tables to focus on narrative text
+  - identify section boundaries (Items) and extract section text
+
+Notes / caveats:
+- Globals Old_HTMLs/Not_Well_Parsed/String_Not_Available are used as side-channels
+  for diagnostics; they are not thread-safe. Prefer single-threaded use or refactor
+  to return structured results if concurrency is required.
+- Heuristics (regex + Levenshtein) work for most filings but can misclassify when
+  issuers deviate heavily from the canonical item wording.
+"""
+
 import re
 import requests
 from bs4 import BeautifulSoup
@@ -10,6 +29,10 @@ import sys
 import html5lib
 
 
+# Diagnostic global buckets (non-thread-safe):
+# - Old_HTMLs: filings where no tables were removed (older markup patterns)
+# - Not_Well_Parsed: filings where key Items could not be identified
+# - String_Not_Available: filings where text extraction from soup failed
 Old_HTMLs = []
 Not_Well_Parsed = []
 String_Not_Available = []
@@ -118,9 +141,20 @@ Official_Items_important_words = [['financial', 'statements'],
          ['management', 'discussion', 'analysis']]
 
 
-#We cannot find the paragraphs as there are random \n all over the place
-# So, we just stick as many as possible sentences in each item together!
 def paragraph_splitter(doc, max_words_document=500):
+  """Split a long string into chunks limited by a max word budget.
+
+  Strategy:
+  - Prefer splitting on sentence boundaries (.) while keeping under the budget
+  - If a single sentence exceeds the budget, fall back to splitting on whitespace
+
+  Args:
+    doc: input text (string)
+    max_words_document: approximate word limit per chunk
+
+  Returns:
+    List[str]: list of contiguous text chunks whose word counts are near/below the limit
+  """
   par = []
   while len(doc.split())>max_words_document:
     indicator = False
@@ -172,48 +206,63 @@ def Find_DuplicatedItems_index(Var):
 
 
 class Disclosure_10K():
-  '''This class does almost everything. It makes an instance from each SEC document and does the pre-processing required on the instance and
-  at the end adds the relevant information to the instance!'''
+  """Represents a 10-K filing and provides parsing/manipulation helpers.
 
-  def __init__(self, cik, TXT_Address, HTML_Address, Company_Name, Form_Type, Date_Filed, User_Api='Example Contact (email@example.com)'):
+  Lifecycle:
+  1) Initialize with cik, txt_url, html_url, name, form, filed, User_Api
+  2) Load(): fetch TXT (HTML source) and build soup
+  3) Remove_Tables*(): heuristics to strip tables and reduce numeric clutter
+  4) Section_Finder_html(): find item anchors
+  5) Section_text_Finder(): extract text spans for discovered items
+
+  Caution: network requests do not retry; pass a meaningful User_Api string as
+  your User-Agent to comply with SEC guidelines.
+  """
+
+  def __init__(self, cik, txt_url, html_url, name, form, filed, User_Api):
     global Old_HTMLs
     global Not_Well_Parsed
     global String_Not_Available
     self.cik = cik
     self.user_agent = User_Api
-    prefix = "https://www.sec.gov/Archives/"
-    self.TXT_Address = prefix + TXT_Address
-    self.HTML_Address = prefix + HTML_Address
-    self.Company_Name = Company_Name
-    self.Form_Type = Form_Type
-    self.Date_Filed = Date_Filed
+    self.txt_url = txt_url
+    self.html_url = html_url
+    self.name = name
+    self.form = form
+    self.filed = filed
     self.debug = False #Turning on this variable, enters the code into the debugign mode which prints out all the necessary information to make sure that the parsing goes well
     self.print_removed_tables = False
-    self.Name = self.Company_Name + '_' + str(self.cik)
-    self.Name = self.Name.replace('/', '')
     self.corrupted = False
     self.State = 'Fine'
 
   def Properties(self):
     '''This function prints out a summary about the specific disclosure instance'''
-    print(f'This file is for \033[94m"{self.Company_Name}"\033[0m with the cik \033[94m"{self.cik}"\033[0m, which has been filed on \033[94m"{self.Date_Filed}"\033[0m,')
-    print(f'here is the link to the html source {self.HTML_Address},')
-    print(f'and to the text file of the html code {self.TXT_Address}')
+    print(f'This file is for \033[94m"{self.name}"\033[0m with the cik \033[94m"{self.cik}"\033[0m, which has been filed on \033[94m"{self.filed}"\033[0m,')
+    print(f'here is the link to the html source {self.html_url},')
+    print(f'and to the text file of the html code {self.txt_url}')
     print('----------------------------------------------------------')
 
-    Title_Name = f'This file is for "{self.Company_Name}" with the cik "{self.cik}", which has been filed on "{self.Date_Filed}",<br>'
-    Title_Name += f'here is the <a href={self.HTML_Address}>link</a> to the html source,<br>'
-    Title_Name += f'and to the <a href={self.TXT_Address}>text file</a> of the html code<br>'
+    Title_Name = f'This file is for "{self.name}" with the cik "{self.cik}", which has been filed on "{self.filed}",<br>'
+    Title_Name += f'here is the <a href={self.html_url}>link</a> to the html source,<br>'
+    Title_Name += f'and to the <a href={self.txt_url}>text file</a> of the html code<br>'
 
     self.Title_Name = Title_Name
 
   @classmethod
-  def Initializer(cls, observation: pd.Series, User_Api='Example Contact (email@example.com)')->'Disclosure':
-    return cls(observation.cik, observation.TXTAddress, observation.DisclosureAddress, observation.CompanyName, observation.FormType, observation.DateFiled,User_Api)
+  def Initializer(cls, observation: pd.Series, User_Api)->'Disclosure':
+    """Build an instance from a pandas Series row.
+
+    Expected columns (snake_case recommended): cik, txt_url, html_url, name, form, filed
+    """
+    return cls(observation.cik, observation.txt_url, observation.html_url, observation.name, observation.form, observation.filed, User_Api)
 
   def Load(self):
-    '''This function downloads the html (.txt) code and parse it Employing beautifulsoup'''
-    url = self.TXT_Address
+    '''Download the filing TXT (HTML source) and parse with BeautifulSoup.
+
+    Fallback to html5lib parser on parser errors; caller can set self.debug
+    to True for additional prints during parsing.
+    '''
+    url = self.txt_url
     response = requests.get(url, headers={'User-Agent': f'{self.user_agent}'})
     #print('Downloading the flie ....')
     self.Text = response.text
@@ -231,6 +280,11 @@ class Disclosure_10K():
     #output.clear()
 
   def Remove_Tables(self):
+    """Apply table-removal passes to reduce non-narrative content.
+
+    Order matters: remove hyperlinks-based TOC tables, then color-styled tables,
+    and finally likely-numeric tables.
+    """
 
 
     self.number_of_tables =  len(self.soup.find_all('table'))
@@ -258,8 +312,9 @@ class Disclosure_10K():
       #self.corrupted = True
 
   def Remove_Tables_hreflinks(self):
-    '''This function removes a table if it contains an href link, which indicates it is the table of contents.
-    As a side bonus, it also removes the phrase "table of contents" within the text (at the end of each page there is sometimes a link to the table of contents).'''
+    '''Remove tables that contain internal href anchors (likely TOC blocks).
+    Also removes explicit "table of contents" anchors inside the page.
+    '''
 
     regex = '\s*table\s*of\s*contents'
     for element in self.soup.find_all('a', string=re.compile(regex, re.IGNORECASE)):
@@ -292,6 +347,10 @@ class Disclosure_10K():
 
     return
   def Remove_Tables_Numerical(self):
+    """Remove tables that appear to be primarily numeric.
+
+    Heuristic: cells with many currency/number-like patterns.
+    """
 
     #Dont add ( to the regex, it would remove many notes under the tables
     regex = '\A\s*($)*\(*\s*\d+,*\d*'
@@ -315,8 +374,9 @@ class Disclosure_10K():
     self.total_table_removed += number_of_eliminated_tables
     return
   def Remove_Tables_Color_css(self):
-    '''This table Removes any colored table if the coloring is done with CSS codes'''
-    '''Only Numerical Tables are colored'''
+    '''Remove colored tables when bgcolor is set via CSS style attributes.
+    Only numerical tables are expected to be color highlighted.
+    '''
 
     i = 0
     j = 0
@@ -346,8 +406,9 @@ class Disclosure_10K():
 
     return
   def Remove_Tables_Color_html(self):
-    '''This table Removes any colored table if the coloring is done with HTML codes'''
-    '''Only Numerical Tables are colored'''
+    '''Remove colored tables when bgcolor is set via HTML attributes.
+    Only numerical tables are expected to be color highlighted.
+    '''
     i = 0
     j = 0
     elements = self.soup.find_all('tr')
@@ -392,9 +453,14 @@ class Disclosure_10K():
   #Problem: "items affecting comparability"This is a new section in a document and captured as a section!Maybe we need to check for specific words to be present in the string
   #https://www.sec.gov/Archives/edgar/data/1138118/0001193125-16-764008-index.html
   def Section_Finder_html(self):
-    '''This funtion Identifies any section that starts with the word item
-    Then it calls another funtion named Item_Matcher()
-    It also uses another function named clean_element_texts, which only cleans the text'''
+    '''Identify section header candidates and match them to official Item titles.
+
+    Steps:
+    - Find nodes whose text begins like "Item ..." using regex (case-insensitive)
+    - Build a neighborhood text window to capture the surrounding string
+    - Clean/normalize text and fuzzy-match against expected titles
+    - Deduplicate repeated item headers
+    '''
 
     number_of_neighbors = 100
     regex = "\A\s*i{0,1}tem[^a-zA-Z]"
@@ -470,6 +536,12 @@ class Disclosure_10K():
       #print('\033[93m', 'This file could not be parsed well(Old HTML)!', '\033[0m')
 
   def Item_Matcher(self, suspected_item, suspected_match):
+    """Fuzzy-match discovered headers to the official Items using Levenshtein.
+
+    Notes:
+    - Shortlists by keeping the minimal normalized edit distance per candidate
+    - Applies Final_Item_Checker keyword gating to avoid false positives
+    """
     True_Items = []
     Wrong_Items_Indices = []
     for count, text in enumerate(self.elements_texts):
@@ -532,6 +604,11 @@ class Disclosure_10K():
     return
 
   def Final_Item_Checker(self, suspected_item, suspected_match):
+    """Keyword-based sanity check to validate a header match.
+
+    Allows a small variation (e.g., exhibit vs exhibits) and requires at
+    least 50% of key words to be present.
+    """
     correct_words = 0
     #print('####', suspected_match)
 
@@ -547,8 +624,7 @@ class Disclosure_10K():
     return False
 
   def Clean_Element_Texts(self, text):
-
-    '''This function prepare elements to be compared to official_titles introduced by SEC'''
+    '''Normalize text to improve matching with official SEC item titles.'''
     text = text.replace("'s", "")
     text = text.replace("'S", "")
     text = text.replace("’S", "")
@@ -569,6 +645,13 @@ class Disclosure_10K():
     return text
 
   def Section_text_Finder(self):
+    """Locate the start of each Item in the raw text and extract its section body.
+
+    Strategy:
+    - Build a regex for the header element and search in the raw HTML text
+    - Use a bounded lookahead across next elements to avoid greedy matches
+    - If a header occurs multiple times (e.g., continued), cull by heuristics
+    """
 
     Failed_elements = []
 
@@ -715,8 +798,8 @@ class Disclosure_10K():
 
     #with open(f'/content/drive/My Drive/sec-edgar-filings/{self.Name}.txt', 'w') as writefile:
     '''with open(f'/content/drive/My Drive/sec-edgar-filings/Size/500_Parsed_10Q/{self.Name}.txt', 'w') as writefile:
-      writefile.write(f"Text Address:{self.TXT_Address}")
-      writefile.write(f"HTML Address:{self.HTML_Address}")
+      writefile.write(f"Text Address:{self.txt_url}")
+      writefile.write(f"HTML Address:{self.html_url}")
       for i in range(len((self.True_Items))-1):
         writefile.write('\n-------------------------------------------------------\n')
         writefile.write(self.True_Items[i])
@@ -728,48 +811,48 @@ class Disclosure_10K():
         writefile.write(f'<p>{self.sections_text[i+1]}</p>')'''
 
 class Disclosure():
-  '''This class does almost everything. It makes an instance from each SEC document and does the pre-processing required on the instance and
-  at the end adds the relevant information to the instance!'''
+  '''Represents a 10-Q filing and provides parsing/manipulation helpers.
 
-  def __init__(self, CIK, TXT_Address, HTML_Address, Company_Name, Form_Type, Date_Filed, User_Api='Example Contact (email@example.com)'):
+  See Disclosure_10K for lifecycle; methods are analogous.
+  '''
+
+  def __init__(self, CIK, txt_url, html_url, name, form, filed, User_Api):
     global Old_HTMLs
     global Not_Well_Parsed
     global String_Not_Available
     self.CIK = CIK
     self.user_agent = User_Api
-    prefix = "https://www.sec.gov/Archives/"
-    self.TXT_Address = prefix + TXT_Address
-    self.HTML_Address = prefix + HTML_Address
-    self.Company_Name = Company_Name
-    self.Form_Type = Form_Type
-    self.Date_Filed = Date_Filed
+    self.txt_url = txt_url
+    self.html_url = html_url
+    self.name = name
+    self.form = form
+    self.filed = filed
     self.debug = False #Turning on this variable, enters the code into the debugign mode which prints out all the necessary information to make sure that the parsing goes well
     self.print_removed_tables = False
-    self.Name = self.Company_Name + '_' + str(self.CIK)
-    self.Name = self.Name.replace('/', '')
     self.corrupted = False
     self.State = 'Fine'
 
   def Properties(self):
     '''This function prints out a summary about the specific disclosure instance'''
-    print(f'This file is for \033[94m"{self.Company_Name}"\033[0m with the CIK \033[94m"{self.CIK}"\033[0m, which has been filed on \033[94m"{self.Date_Filed}"\033[0m,')
-    print(f'here is the link to the html source {self.HTML_Address},')
-    print(f'and to the text file of the html code {self.TXT_Address}')
+    print(f'This file is for \033[94m"{self.name}"\033[0m with the CIK \033[94m"{self.CIK}"\033[0m, which has been filed on \033[94m"{self.filed}"\033[0m,')
+    print(f'here is the link to the html source {self.html_url},')
+    print(f'and to the text file of the html code {self.txt_url}')
     print('----------------------------------------------------------')
 
-    Title_Name = f'This file is for "{self.Company_Name}" with the CIK "{self.CIK}", which has been filed on "{self.Date_Filed}",<br>'
-    Title_Name += f'here is the <a href={self.HTML_Address}>link</a> to the html source,<br>'
-    Title_Name += f'and to the <a href={self.TXT_Address}>text file</a> of the html code<br>'
+    Title_Name = f'This file is for "{self.name}" with the CIK "{self.CIK}", which has been filed on "{self.filed}",<br>'
+    Title_Name += f'here is the <a href={self.html_url}>link</a> to the html source,<br>'
+    Title_Name += f'and to the <a href={self.txt_url}>text file</a> of the html code<br>'
 
     self.Title_Name = Title_Name
 
   @classmethod
-  def Initializer(cls, observation: pd.Series, User_Api='Example Contact (email@example.com)')->'Disclosure':
-    return cls(observation.cik, observation.TXTAddress, observation.DisclosureAddress, observation.CompanyName, observation.FormType, observation.DateFiled, User_Api)
+  def Initializer(cls, observation: pd.Series, User_Api)->'Disclosure':
+    """Build an instance from a pandas Series row (cik, txt_url, html_url, name, form, filed)."""
+    return cls(observation.cik, observation.txt_url, observation.html_url, observation.name, observation.form, observation.filed, User_Api)
 
   def Load(self):
-    '''This function downloads the html (.txt) code and parse it Employing beautifulsoup'''
-    url = self.TXT_Address
+    '''Download the filing TXT (HTML source) and parse with BeautifulSoup (html5lib fallback).'''
+    url = self.txt_url
     response = requests.get(url, headers={'User-Agent': f'{self.user_agent}'})
     #print('Downloading the flie ....')
     self.Text = response.text
@@ -787,6 +870,7 @@ class Disclosure():
     #output.clear()
 
   def Remove_Tables(self):
+    """Apply table-removal passes to reduce non-narrative content."""
 
 
     self.number_of_tables =  len(self.soup.find_all('table'))
@@ -1252,8 +1336,8 @@ class Disclosure():
 
     #with open(f'/content/drive/My Drive/sec-edgar-filings/{self.Name}.txt', 'w') as writefile:
     with open(f'/content/drive/My Drive/sec-edgar-filings/Size/500_Parsed_10Q/{self.Name}.txt', 'w') as writefile:
-      writefile.write(f"Text Address:{self.TXT_Address}")
-      writefile.write(f"HTML Address:{self.HTML_Address}")
+      writefile.write(f"Text Address:{self.txt_url}")
+      writefile.write(f"HTML Address:{self.html_url}")
       for i in range(len((self.True_Items))-1):
         writefile.write('\n-------------------------------------------------------\n')
         writefile.write(self.True_Items[i])
