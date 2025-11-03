@@ -7,7 +7,6 @@ Extract narrative sections (Items) from 10-Q and 10-K filings on the SEC EDGAR s
 - Build a reproducible workflow to turn raw EDGAR filings into structured, analysis-ready text.
 - Focus on narrative sections (e.g., MD&A, Risk Factors, Controls and Procedures) rather than numerical tables.
 - Handle real-world HTML variability using pragmatic heuristics and fuzzy matching.
-- Keep the code simple enough to read and extend (resume and portfolio friendly).
 
 ## What’s included
 
