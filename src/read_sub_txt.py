@@ -35,13 +35,16 @@ if {'cik', 'adsh', 'instance'}.issubset(df.columns):
 	
 	# Ensure all URLs end with .htm
 	df['html_url'] = df['html_url'].apply(lambda x: x if x.endswith('.htm') else x + '.htm')
-	
+	df['txt_url'] = (
+		"https://www.sec.gov/Archives/edgar/data/" + df['cik'].astype(str)
+		+ '/' + adsh_nodash + '/' + df['adsh'] + '.txt'
+	)
+
 	print(f"\nExample HTML URL:")
 	print(df.iloc[0]['html_url'])
-	print(f"Accession: {df.iloc[0]['adsh']}")
 
 # Save combined CSV next to the dataset folder
-output_csv = os.path.join("src", "Financial Statement Dataset", "sub_all.csv")
+output_csv = os.path.join("src", "Financial Statement Dataset", "edgar_sub_database.csv")
 os.makedirs(os.path.dirname(output_csv), exist_ok=True)
 df.to_csv(output_csv, index=False)
 print(f"\nSaved combined CSV to {output_csv}")
